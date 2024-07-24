@@ -1,0 +1,239 @@
+Step-by-Step Guide
+Create the .NET 8 Web API Project:
+
+
+dotnet new webapi -n ContractAPI
+cd ContractAPI
+Install Necessary Packages:
+
+
+dotnet add package AutoMapper.Extensions.Microsoft.DependencyInjection
+dotnet add package Dapper
+dotnet add package Microsoft.EntityFrameworkCore
+dotnet add package Microsoft.EntityFrameworkCore.SqlServer
+dotnet add package FluentValidation
+Setup Project Structure:
+
+Core Layer:
+
+Entities for domain models.
+Interfaces for repository contracts.
+Infrastructure Layer:
+
+Data for EF Core DbContext and Dapper setup.
+Repositories for repository implementations.
+Application Layer:
+
+DTOs for data transfer objects.
+Services for application logic.
+Validators for FluentValidation rules.
+API Layer:
+
+Controllers and middleware.
+Create Entity:
+
+
+// Core/Entities/Contract.cs
+public class Contract
+{
+    public int Id { get; set; }
+    public string Name { get; set; }
+    public DateTime StartDate { get; set; }
+    public DateTime EndDate { get; set; }
+}
+Create DTO:
+
+
+// Application/DTOs/ContractDto.cs
+public class ContractDto
+{
+    public string Name { get; set; }
+    public DateTime StartDate { get; set; }
+    public DateTime EndDate { get; set; }
+}
+Setup AutoMapper:
+
+
+// Application/Mapping/MappingProfile.cs
+public class MappingProfile : Profile
+{
+    public MappingProfile()
+    {
+        CreateMap<Contract, ContractDto>().ReverseMap();
+    }
+}
+Create Validator:
+
+
+// Application/Validators/ContractValidator.cs
+public class ContractValidator : AbstractValidator<ContractDto>
+{
+    public ContractValidator()
+    {
+        RuleFor(c => c.Name).NotEmpty().WithMessage("Name is required.");
+        RuleFor(c => c.StartDate).LessThan(c => c.EndDate).WithMessage("StartDate must be before EndDate.");
+    }
+}
+Setup DbContext:
+
+
+// Infrastructure/Data/ApplicationDbContext.cs
+public class ApplicationDbContext : DbContext
+{
+    public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options) { }
+    public DbSet<Contract> Contracts { get; set; }
+}
+Create Repository Interface and Implementation:
+
+
+// Core/Interfaces/IContractRepository.cs
+public interface IContractRepository
+{
+    Task AddContractAsync(Contract contract);
+    // Other methods like GetContract, UpdateContract, etc.
+}
+
+// Infrastructure/Repositories/ContractRepository.cs
+public class ContractRepository : IContractRepository
+{
+    private readonly ApplicationDbContext _context;
+    private readonly IDbConnection _dbConnection;
+
+    public ContractRepository(ApplicationDbContext context, IDbConnection dbConnection)
+    {
+        _context = context;
+        _dbConnection = dbConnection;
+    }
+
+    public async Task AddContractAsync(Contract contract)
+    {
+        await _context.Contracts.AddAsync(contract);
+        await _context.SaveChangesAsync();
+    }
+
+    // Dapper methods for complex queries
+}
+Configure Services and Middleware in Startup:
+
+
+// Program.cs
+var builder = WebApplication.CreateBuilder(args);
+
+// Add services to the container.
+builder.Services.AddDbContext<ApplicationDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+builder.Services.AddScoped<IDbConnection>(sp => new SqlConnection(
+    builder.Configuration.GetConnectionString("DefaultConnection")));
+builder.Services.AddScoped<IContractRepository, ContractRepository>();
+builder.Services.AddAutoMapper(typeof(MappingProfile));
+builder.Services.AddValidatorsFromAssemblyContaining<ContractValidator>();
+builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+var app = builder.Build();
+
+// Configure the HTTP request pipeline.
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.UseMiddleware<ExceptionMiddleware>(); // Custom exception handling middleware
+
+app.UseHttpsRedirection();
+
+app.UseAuthorization();
+
+app.MapControllers();
+
+app.Run();
+Create Exception Middleware:
+
+
+// API/Middleware/ExceptionMiddleware.cs
+public class ExceptionMiddleware
+{
+    private readonly RequestDelegate _next;
+    private readonly ILogger<ExceptionMiddleware> _logger;
+
+    public ExceptionMiddleware(RequestDelegate next, ILogger<ExceptionMiddleware> logger)
+    {
+        _next = next;
+        _logger = logger;
+    }
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        try
+        {
+            await _next(context);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "An error occurred.");
+            await HandleExceptionAsync(context, ex);
+        }
+    }
+
+    private Task HandleExceptionAsync(HttpContext context, Exception ex)
+    {
+        context.Response.ContentType = "application/json";
+        context.Response.StatusCode = (int)HttpStatusCode.InternalServerError;
+        return context.Response.WriteAsync(new { error = ex.Message }.ToString());
+    }
+}
+Create Contract Controller:
+
+
+// API/Controllers/ContractController.cs
+[ApiController]
+[Route("api/[controller]")]
+public class ContractController : ControllerBase
+{
+    private readonly IContractRepository _repository;
+    private readonly IMapper _mapper;
+    private readonly IValidator<ContractDto> _validator;
+
+    public ContractController(IContractRepository repository, IMapper mapper, IValidator<ContractDto> validator)
+    {
+        _repository = repository;
+        _mapper = mapper;
+        _validator = validator;
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> CreateContract([FromBody] ContractDto contractDto)
+    {
+        var validationResult = await _validator.ValidateAsync(contractDto);
+        if (!validationResult.IsValid)
+        {
+            return BadRequest(validationResult.Errors);
+        }
+
+        var contract = _mapper.Map<Contract>(contractDto);
+        await _repository.AddContractAsync(contract);
+        return Ok();
+    }
+
+    // Other actions like GetContract, UpdateContract, etc.
+}
+Additional Configuration
+Connection Strings:
+
+
+// appsettings.json
+{
+    "ConnectionStrings": {
+        "DefaultConnection": "Your_SQL_Server_Connection_String"
+    },
+    "Logging": {
+        "LogLevel": {
+            "Default": "Information",
+            "Microsoft.AspNetCore": "Warning"
+        }
+    },
+    "AllowedHosts": "*"
+}
+This setup provides a comprehensive foundation for a .NET 8 Web API project using Onion Architecture with middleware for exception handling, validation, AutoMapper, Dapper, and Entity Framework.
